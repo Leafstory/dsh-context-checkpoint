@@ -1,0 +1,12 @@
+# context-checkpoint 作为 profile bundle 的 patch 层。
+#
+# 这个文件是"把本插件装进 DSH"的正规入口：
+# dsh-app-boot 会按 profile 的 `dsh.profile.bundles` 顺序，把每个 bundle 的
+# dsh.bundle.patch 指向的文件叠加成插件树 —— 所以本文件里的条目会进入装配。
+#
+# bundle 装配（重启后自动生效、无需注入器）与 dev_inject_plugin（运行时热测）
+# 两条路径都指向同一份 lib/index.js，行为一致。
+
+- insert:
+    - id: context-checkpoint
+      name: '@dsh-external/context-checkpoint'

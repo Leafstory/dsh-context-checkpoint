@@ -1,0 +1,36 @@
+{
+  "name": "@dsh-external/context-checkpoint",
+  "version": "0.4.0",
+  "description": "DSH 上下文检查点：每步注入真实占用条、模型可显式预约 checkpoint+压缩、压缩后在回合边界执行并自动继续同一任务",
+  "private": true,
+  "type": "module",
+  "main": "./lib/index.js",
+  "files": [
+    "lib",
+    "src",
+    "scripts",
+    "skill",
+    "cordis.patch.yml",
+    "INSTALL.md",
+    "test-plugin.mjs"
+  ],
+  "license": "BSD-3-Clause",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check",
+    "test": "node test-plugin.mjs",
+    "dsh:install": "node scripts/install.mjs",
+    "export": "node scripts/export.mjs"
+  },
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tgz
+*.tsbuildinfo
+
+# lib/ 刻意**不**忽略：它是装配入口（dev_inject_plugin / bundles 都指向它），
+# 仓库要开箱可用。`npm run build` 可重新生成，`npm run check` 校验 src ≡ lib。
