@@ -12,7 +12,7 @@
 ## 前提
 
 - DSH 已装好、能启动（Node 随 DSH 自带即可，脚本零外部依赖）。
-- 知道两个值：`DSH_HOME`（默认 `~/.dsh`；本机实测例：`E:\dsh workplace\.dsh`）与目标 **profile 名**
+- 知道两个值：`DSH_HOME`（默认 `~/.dsh`，也可以是任意自定义目录，如 `D:\dsddata\.dsh`）与目标 **profile 名**
   （`<DSH_HOME>/profiles/` 下的目录名，常见 `web` / `desktop`）。
 
 ## 安装（一条命令）

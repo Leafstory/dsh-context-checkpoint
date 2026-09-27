@@ -1,9 +1,9 @@
 /**
  * 取证脚本的路径解析。
  *
- * 为什么要有这一层：这些脚本原本把本机绝对路径（`E:/dsh workplace/...`、
- * `C:/Users/leaf/...`）直接写成默认值 —— 既泄露开发机的用户名与目录结构，
- * 别人拿去也跑不通。这里统一改成**环境变量优先 + 自动推断**。
+ * 为什么要有这一层：这些脚本原本把**开发机的绝对路径**直接写成默认值 ——
+ * 既泄露了那台机器的用户名与目录结构，别人拿去也跑不通。
+ * 这里统一改成**环境变量优先 + 自动推断**。
  *
  * 环境变量（都可选）：
  *   DSH_HOME               DSH 数据根（默认 `~/.dsh`）
@@ -21,7 +21,7 @@ export const DSH_HOME = process.env.DSH_HOME ? resolve(process.env.DSH_HOME) : j
 export const PROFILE = process.env.DSH_PROFILE ?? 'web';
 
 /**
- * DSH 把项目路径编码成会话目录名：`E:\dsh workplace` → `--E-dsh~0020workplace--`
+ * DSH 把项目路径编码成会话目录名：`D:\my projects\demo` → `--D-my~0020projects-demo--`
  * （去掉盘符冒号、分隔符统一成 `-`、空格写成 `~0020`、两端加 `--`）。
  */
 export function slugFor(dir) {

@@ -367,10 +367,10 @@ node install.mjs --dsh-home "<DSH_HOME>" --profile <profile>        # 目标机�
 插件只提供工具与注入。安装器是幂等的，支持 `--dry-run` / `--check` / `--uninstall`，
 并且导出的 tgz 里含 `skill/`，所以 `npm install <tgz>` 也是完整服务。
 
-**本机（开发态）用运行时注入：**
+**开发态用运行时注入：**
 
 ```powershell
-dev_inject_plugin     { "dir": "E:/dsh workplace/context-checkpoint-plugin" }
+dev_inject_plugin     { "dir": "<本仓库路径>" }
 dev_uninject_plugin   { "match": "context-checkpoint" }
 ```
 
