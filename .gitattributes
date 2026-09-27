@@ -1,0 +1,8 @@
+# 统一换行符：`lib/index.js` 与 `src/index.js` 必须**逐字节一致**（build.mjs 会校验），
+# 如果 checkout 时按平台各转一次，这个校验就会莫名为假。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.zip binary
+*.tgz binary
