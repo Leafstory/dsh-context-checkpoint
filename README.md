@@ -6,7 +6,7 @@
 
 | 步 | 由谁做 | 说明 |
 | --- | --- | --- |
-| ① 达限 | 越线提醒（本插件）/ DSH 原生阈值 / **用户本人明说** | 跨档位时本插件**提醒一次**落盘；占用 ≥ 窗口 50% 是**上膛地板**，但用户明确要求总结/开始项目时地板让路（D-006） |
+| ① 达限 | 越线提醒（本插件）/ DSH 原生阈值 / **用户本人明说** | 跨档位时本插件**提醒一次**落盘；占用 ≥ 窗口 50% 是**触发门槛**，但用户明确要求总结/开始项目时门槛让路（D-006） |
 | ② 总结 | 模型 + `context_compact` + skill | 模型把项目状态写进 `important_view.<task>-<session>.md` |
 | ③ 压缩 | **DSH 压缩引擎**（本插件触发：`compactIfNeeded`） | 触发点 = **`agent/pre-step` 步骤边界**，用 `'context-overflow'` 绕过阈值 |
 | ④ **注入** | **本插件的系统提示词段** | 每代读一次检查点文件，**内容作为静态上下文注入**；跨代（压缩发生）自动换新 |
@@ -18,28 +18,29 @@
 
 | 工具 | 作用 |
 | --- | --- |
-| `context_status` | 按需读精确占用（已用 token / 窗口 / 距安全线 / 上膛数 / 压缩执行入口探针 / 检查点文件探测） |
-| `context_compact` | **落盘锚点 + 上膛**：记录交付点，把压缩挂到下一个步骤边界。**它本身不执行压缩** |
+| `context_status` | 按需读精确占用（已用 token / 窗口 / 距安全线 / 待执行数 / 压缩执行入口探针 / 检查点文件探测） |
+| `context_compact` | **落盘锚点 + 预约**：记录交付点，把压缩挂到下一个步骤边界。**它本身不执行压缩** |
 
-**占用数字只在模型主动调用 `context_status` 时给出**，不进提示词段 —— 原因见下面 4b。
+**占用数字只在模型主动调用 `context_status` 时给出**，不进提示词段 ——
+提示词段里只要出现动态值，整段 prompt 缓存就会失效（代价是每天上百美元的重复计费）。
 
-### ③ 到底怎么触发的（第三版实现，前两版都失败了）
+### ③ 压缩是怎么被触发的
 
-前两版都栽在"执行窗口"上：
+触发点是 **`agent/pre-step`（步骤边界）**，配合 `'context-overflow'` 这条分支 ——
+它不比阈值、也不需要 agent 空闲。这一点是关键，因为**空闲窗口根本等不到**：
 
-1. **`whenIdle()` + `setImmediate` + `runMaintenance`** —— turn 边界一开 phase 立刻回 `running`，必输。
-2. **`agent/status → idle` + `compactNow()`** —— 看着更对（idle 事件确实在 phase 变 idle 之后发），
-   但实机仍然失败：模型调完 `context_compact` 后**继续在同一回合里干活**，空闲窗口永不出现。
-   2026-09-23 21:36 实机事故（会话 #4230/#4231）：上膛的压缩一直没执行，直到请求被服务端以
+**等空闲再压**是走不通的：模型调用 `context_compact` 之后**继续在同一回合里干活**，
+空闲窗口永远不出现，预约的压缩一直不执行，直到请求被服务端以
 
-   ```
-   This model's maximum context length is 1048576 tokens. However, you requested 1048831 tokens
-   (655831 in the messages, 393000 in the completion). code: CONTEXT_WINDOW_EXCEEDED, status 400
-   ```
+```
+This model's maximum context length is 1048576 tokens. However, you requested 1048831 tokens
+(655831 in the messages, 393000 in the completion). code: CONTEXT_WINDOW_EXCEEDED, status 400
+```
 
-   拒绝，才由 DSH 的 overflow 兜底路径压了一次。
+拒绝，才由 DSH 的 overflow 兜底路径勉强压了一次。另一种做法 `compactNow()` 同样要求空闲
+（它内部就是 `agent.runMaintenance()`），回合内调用必被包成 `ManualCompactionError('busy')`。
 
-**第三版（当前）**：读 DSH 自己的代码找到那条不需要空闲、也不比阈值的分支 ——
+**实际做法**：读 DSH 自己的代码找到那条不需要空闲、也不比阈值的分支 ——
 
 ```js
 // dsh-compaction-basic/lib/index.js:886-893
@@ -55,22 +56,22 @@ if (trigger === "context-overflow") {          // 不走 threshold 判定
 
 - **不依赖阈值**（`thresholdRatio 0.8 × contextWindow` 在本机因 `maxTokens` 占掉输入预算而永远够不到）；
 - **不依赖空闲**（`compactIfNeeded` 没有 `runMaintenance` 包装）；
-- **不依赖模型自觉停手**（上膛后的**下一步**就执行；若模型正好收尾，则由 idle 兜底 + `followup()` 唤醒）。
+- **不依赖模型自觉停手**（预约后的**下一步**就执行；若模型正好收尾，则由 idle 兜底 + `followup()` 唤醒）。
 
 三道闸 + 一层豁免 + 一个显式绕行口：
 
 | 闸 | 常量 | 作用 |
 | --- | --- | --- |
-| 上膛地板 | `ARM_MIN_RATIO = 0.5` | 占用 < 窗口 50% 时只落盘、不压缩（避免把还在用的历史白白压掉） |
-| **用户意图豁免** | `userIntentWindowMs = 15 分钟` | 用户**本人**说过"总结/落盘/压缩/开始项目" ⇒ **只跳地板**（落盘闸照旧，见下节 D-006） |
-| 执行前复核 | `ARM_STALE_RATIO = 0.5` | 占用已跌到上膛时的一半以下 ⇒ 期间别处压过 ⇒ 作废，避免刚压完又压 |
-| **落盘闸** | `CHECKPOINT_FRESH_MS = 10 分钟` | 检查点文件缺失/陈旧 ⇒ **拒绝上膛**（理由见下节：arm 之后没有补写窗口） |
-| 显式绕过 | `context_compact { force: true }` | 绕过**地板与落盘闸**（实机验证 / 应急重置），返回文案标注 `FORCED` |
+| 触发门槛 | `MIN_TRIGGER_RATIO = 0.5` | 占用 < 窗口 50% 时只落盘、不压缩（避免把还在用的历史白白压掉） |
+| **用户意图豁免** | `userIntentWindowMs = 15 分钟` | 用户**本人**说过"总结/落盘/压缩/开始项目" ⇒ **只跳门槛**（落盘闸照旧，见下节 D-006） |
+| 执行前复核 | `STALE_RATIO = 0.5` | 占用已跌到预约时的一半以下 ⇒ 期间别处压过 ⇒ 作废，避免刚压完又压 |
+| **落盘闸** | `CHECKPOINT_FRESH_MS = 10 分钟` | 检查点文件缺失/陈旧 ⇒ **拒绝预约**（理由见下节：预约之后没有补写窗口） |
+| 显式绕过 | `context_compact { force: true }` | 绕过**门槛与落盘闸**（实机验证 / 应急重置），返回文案标注 `FORCED` |
 
 **实机验证（2026-09-23 22:26，会话 57d4c0ff turn 30）**：
 
 ```
-#4711  tool/call  context_compact {force:true}     ← 上膛
+#4711  tool/call  context_compact {force:true}     ← 预约
 #4713  step/end   step=2
 #4714  compaction/start  id=d7119c5a turn=30       ← 步骤边界自动开跑
 #4715  compaction/summary
@@ -80,15 +81,15 @@ if (trigger === "context-overflow") {          // 不走 threshold 判定
 #4722  assistant/message in=57,087                 ← 压缩前是 207,506
 ```
 
-`surfaceReplaceCount 216 → 217`，`armedCompactions` 归 0（上膛被消费干净）。
+`surfaceReplaceCount 216 → 217`，`scheduledCompactions` 归 0（预约被消费干净）。
 **start/end 落在 step2 与 step3 之间 —— 回合并未结束**：模型没有停手、没有空闲窗口，压缩照样执行了。
-这就是第三版相对前两版的分水岭。
+这正是"不等空闲窗口"的关键：压缩发生在**回合中间**。
 
 **第二次实机（同日 23:2x，同一会话 turn 31）—— 完整 1-2-3-4 一次跑通**：
 
 ```
 #5406  write  important_view.context-checkpoint.md   ← ② 落盘（generation 6）
-#5411  tool/call  context_compact {force:true}        ← ③ 上膛
+#5411  tool/call  context_compact {force:true}        ← ③ 预约
 #5414  compaction/start  id=9da939a8 turn=31          ← 步骤边界自动开跑
 #5415  compaction/summary
 #5416  user/message  src=compact
@@ -97,19 +98,19 @@ if (trigger === "context-overflow") {          // 不走 threshold 判定
 ```
 
 请求输入 136,892 → 57,424（`context_status` 报 57,407 token / 1,000,000），
-`armedCompactions` 归 0，文字压缩结果归因仍判为"插件上膛"。
+`scheduledCompactions` 归 0，文字压缩结果归因仍判为"插件预约"。
 
 **触发方归属**（`scripts/verify-coupling-live.mjs` 自动判据；`compaction/start` 事件本身**不带** trigger 字段）：
 同一会话历史上的五次压缩 —— turn 7 与 turn 29 两次是 **DSH 在请求被拒之后的原生兜底**
-（`CONTEXT_WINDOW_EXCEEDED`），其余三次（turn 30 / turn 31 ×2）是**插件上膛**
+（`CONTEXT_WINDOW_EXCEEDED`），其余三次（turn 30 / turn 31 ×2）是**插件预约**
 （调用 `context_compact` 后间隔 3 个事件开跑）。
 
-### 落盘闸：arm 之后**没有**补写窗口
+### 落盘闸：预约之后**没有**补写窗口
 
-时序推理只有一句话：压缩跑在 arm 之后的**第一个步骤边界**。
+时序推理只有一句话：压缩跑在预约之后的**第一个步骤边界**。
 
 ```
-step N    : 模型调用 context_compact → 上膛
+step N    : 模型调用 context_compact → 预约
 step N+1  : pre-step 触发 → 压缩开跑
             （此刻磁盘上是什么，压完注入到新代提示词里的就是什么）
 ```
@@ -118,10 +119,10 @@ step N+1  : pre-step 触发 → 压缩开跑
 或者干脆不存在，压缩就会把尚未落盘的最新结论压掉，再往新代注入一份**旧**总结 ——
 恰好就是这个工具要防的"结论丢失"。
 
-因此 `context_compact` 在上膛前先 `statSync` 一次：文件缺失、或 mtime 距今超过
-`CHECKPOINT_FRESH_MS`（10 分钟），就**拒绝上膛**，并明确要求"先写/更新文件，再调用一次"。
+因此 `context_compact` 在预约前先 `statSync` 一次：文件缺失、或 mtime 距今超过
+`CHECKPOINT_FRESH_MS`（10 分钟），就**拒绝预约**，并明确要求"先写/更新文件，再调用一次"。
 补写后 mtime 立刻变新，用同样的参数重调即可通过（不会留死循环）。
-绕过**这道闸**的唯一口子是 `force: true` —— 用户意图豁免只让**地板**让路，不碰这道闸。
+绕过**这道闸**的唯一口子是 `force: true` —— 用户意图豁免只让**门槛**让路，不碰这道闸。
 
 为什么用固定时间窗，而不是"比较上次压缩时间"这种更精确的判据：后者需要额外状态（跨重启还要持久化），
 而前者的误伤代价只是**多写一次文件**（保守方向），漏判的代价却是不可逆的结论丢失。
@@ -129,12 +130,12 @@ step N+1  : pre-step 触发 → 压缩开跑
 ### 用户意图豁免：谁按的按钮，就按谁说的话算（D-006）
 
 用户明确说"总结一下本轮 / 开始项目"时要的是**固化状态 + 换一个干净的起点**，与占用多少无关。
-拿地板把这种指令挡回去（"占用还不够，先别压"）等于把一条**指令**降级成一条**建议**。
+拿门槛把这种指令挡回去（"占用还不够，先别压"）等于把一条**指令**降级成一条**建议**。
 
 | 项 | 取值 |
 | --- | --- |
 | 触发判据 | `event.type === 'user/message'` ∧ `event.data.source.kind === 'user'` ∧ 正文命中信号词表 |
-| 豁免范围 | **只有上膛地板**；落盘闸、执行前复核照旧生效 |
+| 豁免范围 | **只有触发门槛**；落盘闸、执行前复核照旧生效 |
 | 有效期 | `userIntentWindowMs`，默认 15 分钟；**`0` = 关闭豁免** |
 | 比较方式 | `ageMs < 窗口`（**严格小于**） |
 | 可观测 | `context_status` 返回 `userIntentWindowMs` 与 `recentUserIntent`（`null` 或 `{word, ageMs}`） |
@@ -150,7 +151,7 @@ step N+1  : pre-step 触发 → 压缩开跑
 3. **窗口为 0 必须真的等于关闭。** 回归 5j 当场抓到过：写成 `ageMs <= 窗口` 时，同一毫秒记录的消息
    满足 `0 <= 0`，于是 `userIntentWindowMs: 0` 静默失效。判据必须是严格小于。
 
-安全方向：漏判（用户确实要求过但没识别出来）只是退回地板，**保守**；误判才会在短会话上白压一把 ——
+安全方向：漏判（用户确实要求过但没识别出来）只是退回门槛，**保守**；误判才会在短会话上白压一把 ——
 所以判据取保守的那一侧。
 
 > 判定"新代码是否真的在跑"：看 `context_status` 有没有 `userIntentWindowMs` / `recentUserIntent`。
@@ -194,10 +195,10 @@ node scripts/dump-event.mjs 5415 --grep "generation: 6"   # 同一次的 compact
 `userIntentWindowMs: 900000` —— 它们在**压缩摘要里也各出现 2 次**（摘要吸收了我自己写文件时的
 工具调用参数）。干净的判别词例如 `generation: N`、检查点特有的小节名、或正文里只属于自己的那句话。
 
-### 为什么工具不自己去压缩（第一版失败尝试，保留作为记录）
+### 为什么插件不自己执行压缩
 
-早期实现用 `agent.whenIdle()` → `agent.runMaintenance()` → `ctx.compaction.compactNow()`
-在回合边界执行压缩。**这个时机窗口赢不了**：
+用 `agent.whenIdle()` → `agent.runMaintenance()` → `ctx.compaction.compactNow()`
+在回合边界执行压缩，**这个时机窗口赢不了**：
 
 - `compactNow()` 内部就是 `agent.runMaintenance(...)`，phase 不是 idle 时被包成
   `ManualCompactionError('busy', 'manual compaction requires an idle agent with no waking queued work')`
@@ -211,7 +212,7 @@ ManualCompactionError: manual compaction requires an idle agent with no waking q
 ```
 
 结论：插件**绝不自行实现压缩算法**（那是重写 DSH 带 8 小节 checkpoint 的逻辑），
-但**触发时机必须自己掌握** —— 这就是第三版做的事。
+但**触发时机必须自己掌握** —— 具体做法见上一节。
 
 ## 平面差异（重要）
 
@@ -299,7 +300,7 @@ if (declared === undefined) throw new Error(`profile bundle "X" declares no dsh.
 | 测试 | **124 项**，含字符串 sessionId 致命回归、③ 的两条触发路径、三道闸、用户意图豁免（5j）、落盘闸自愈路径、超限截断注入、成本回归 | `node test-plugin.mjs` |
 | 闭环 | 7 项：检查点正文注入、同代逐字不变、跨代换新 | `node scripts/verify-closed-loop.mjs` |
 | 运行时 | `register()` 守卫 + `ctx.get()` 软解析 + 降级分支 + 能力探针 | 内建 |
-| 实机 | 压缩**归属权**判据（插件上膛 vs DSH 原生兜底）+ 按事件类型/按行号取证 | `node scripts/verify-coupling-live.mjs`、`scripts/list-events.mjs`、`scripts/tail-session.mjs`、`scripts/dump-event.mjs` |
+| 实机 | 压缩**归属权**判据（插件预约 vs DSH 原生兜底）+ 按事件类型/按行号取证 | `node scripts/verify-coupling-live.mjs`、`scripts/list-events.mjs`、`scripts/tail-session.mjs`、`scripts/dump-event.mjs` |
 
 构建刻意**不做编译**（`src/index.js` → `lib/index.js` 是校验后复制）：历史上
 「重新构建」曾把手写 lib 覆盖回旧脚手架，直接导致插件挂起。
@@ -383,15 +384,15 @@ DSH Desktop 启动时会重写 profile 的 `package.json`（19:53:02 那次把�
   `dsh-web-app` disable；本机已在 `.dsh/profiles/web/cordis.patch.yml` 加
   `- id: compaction-basic` + `disabled: false` 装回（**重启生效**）。
   回退：改回 `disabled: true` 后重启。
-- 压缩**失败或无事可压**时不唤醒续读（不谎报"已压缩"）；上膛请求会被清掉，
-  由下一次越线提醒重新上膛。成功的压缩在回合内是**透明**的：本回合照常继续，无需唤醒。
-- 上膛有**地板**（窗口 50%）：占用还低时调用 `context_compact` 只落盘不压缩 ——
+- 压缩**失败或无事可压**时不唤醒续读（不谎报"已压缩"）；预约请求会被清掉，
+  由下一次越线提醒重新预约。成功的压缩在回合内是**透明**的：本回合照常继续，无需唤醒。
+- 预约有**门槛**（窗口 50%）：占用还低时调用 `context_compact` 只落盘不压缩 ——
   这是刻意的，避免把还在用的历史白白压掉。**但用户本人明确要求总结/落盘/压缩/开始项目时，
-  地板自动让路**（D-006），返回文案会写明是按哪位用户的话放行的；其余情况实机验证请用
+  门槛自动让路**（D-006），返回文案会写明是按哪位用户的话放行的；其余情况实机验证请用
   `context_compact { force: true }`。
-- 上膛还有**落盘闸**（检查点必须是 10 分钟内写过的）：长回合里模型如果在回合开头写了文件、
+- 预约还有**落盘闸**（检查点必须是 10 分钟内写过的）：长回合里模型如果在回合开头写了文件、
   到回合末才调用，会被要求**重写一次**再调用。这是刻意选的保守方向 ——
   误伤的代价是多写一次文件，漏判的代价是不可逆地丢结论。`force: true` 可绕过，
   **用户意图豁免不绕过它**（用户要的是"固化状态"，状态没落盘就压缩正好违背他的意图）。
 - 用户意图豁免（D-006）的判据是**保守**的：只认真正的用户消息 + 固定词表 + 15 分钟窗口。
-  代价是"用户用词很偏"时可能识别不到 —— 退回地板，不会误触。
+  代价是"用户用词很偏"时可能识别不到 —— 退回门槛，不会误触。

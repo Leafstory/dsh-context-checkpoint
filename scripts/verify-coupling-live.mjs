@@ -59,9 +59,9 @@ for (const [idx, line] of lines.entries()) {
   if (ev?.type === 'compaction/end') ends.push({ idx, ...ev.data });
 }
 
-// ── 归属权：这次压缩是**插件上膛**触发的，还是 DSH 原生兜底触发的？──────────
+// ── 归属权：这次压缩是**插件预约**触发的，还是 DSH 原生兜底触发的？──────────
 // 判据（`compaction/start` 事件本身没有 trigger 字段，所以只能靠前后文推断）：
-//   A. 之前出现 `context_compact` 的工具调用，且其后没有请求失败 → 插件上膛路径
+//   A. 之前出现 `context_compact` 的工具调用，且其后没有请求失败 → 插件预约路径
 //   B. 之前出现 `assistant/attempt`（请求被服务端拒绝）  → DSH 的 overflow 重试路径
 //   C. 都不是 → 归因不明（可能是 DSH 的 pressure 阈值路径，需要占用真的到 800k）
 // 顺带打印 start 之前的最后一次请求输入量 —— 用它佐证"不可能撞到 DSH 阈值"。
@@ -83,13 +83,13 @@ function inputBefore(idx) {
 }
 
 function attribute(idx) {
-  const arm = compactCallIdxs.filter((i) => i < idx && i > idx - 400).pop();
+  const call = compactCallIdxs.filter((i) => i < idx && i > idx - 400).pop();
   const attempt = attemptIdxs.filter((i) => i < idx && i > idx - 400).pop();
-  if (arm !== undefined && (attempt === undefined || arm > attempt)) {
-    return `插件上膛（#${arm} 调用 context_compact，间隔 ${idx - arm} 个事件）`;
+  if (call !== undefined && (attempt === undefined || call > attempt)) {
+    return `插件预约（#${call} 调用 context_compact，间隔 ${idx - call} 个事件）`;
   }
   if (attempt !== undefined) return `DSH 原生 overflow 重试（此前有请求被拒 #${attempt}）`;
-  if (arm !== undefined) return `插件上膛（#${arm}，但期间另有请求被拒 #${attempt}）`;
+  if (call !== undefined) return `插件预约（#${call}，但期间另有请求被拒 #${attempt}）`;
   return '归因不明（无工具调用、无请求失败 → 若是 DSH pressure 路径，占用应已达 800k）';
 }
 
@@ -125,7 +125,7 @@ if (injected.length === 0) console.log('  （无）');
 const text = lines.join('\n');
 console.log('\n── 版本与闭环特征 ──');
 const marks = [
-  ['新工具文案 Compaction is armed', 'Compaction is armed'],
+  ['新工具文案 Compaction scheduled', 'Compaction scheduled'],
   ['续读消息（压缩后）', '检查点已落盘，历史已压缩'],
   ['旧续读消息', '压缩失败'],
   ['检查点正文注入标志', '跨压缩/跨会话的权威副本']

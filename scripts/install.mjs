@@ -491,7 +491,7 @@ say(`
 3. 确认第 ③ 步能压（compaction-basic 已启用）：
      context_status.capabilityProbe["compaction.compactIfNeeded"] === "present"
 4. 自然路径验收：在占用远低于 50% 时直接说「总结一下本轮」，
-   应看到 armed (on the user's explicit request: "…")，**不需要任何 force**。
+   应看到 Compaction scheduled (on the user's explicit request: "…")，**不需要任何 force**。
 5. skill 验收：让模型 skill context-checkpoint，或看 <DSH_HOME>/skills/context-checkpoint/SKILL.md。
 
 ⚠️ 若目标终端是 DSH Desktop：它启动时会重写 profile 的 package.json，

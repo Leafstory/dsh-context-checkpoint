@@ -47,7 +47,7 @@ node install.mjs --dsh-home "<DSH_HOME>" --profile <profile> --uninstall
    `capabilityProbe["compaction.compactIfNeeded"] === "present"` 且 `capabilityProbe.compaction === "present"`。
 3. **自然路径**（不需要任何 `force`）—— 在占用**远低于 50%** 时直接对模型说
    「总结一下本轮」，应看到
-   `Compaction is armed (on the user's explicit request: "…")`；
+   `Compaction scheduled (on the user's explicit request: "…")`；
    随后 `context_status.recentUserIntent` 报出命中词。
 4. **第 ④ 步真的换了内容** —— 压缩后新铸的提示词段里应带上新一代码次：
 

@@ -278,7 +278,7 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-// ── 5. context_compact：落盘锚点 + 上膛（压缩由 DSH 引擎执行）─────────────
+// ── 5. context_compact：落盘锚点 + 预约（压缩由 DSH 引擎执行）─────────────
 // 设计决定（用户确认方案 A）：本插件**不自行压缩**，只负责落盘与触发时机。
 // 触发走后侧路径：pre-step（回合内步骤边界）用 'context-overflow' 强制压缩。
 {
@@ -290,7 +290,7 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
   check('compact 不在工具内自行压缩', ctx.record.compactionCalls, 0);
   check('compact 记录落盘点', /Checkpoint recorded/.test(out) ? 1 : 0, 1, out);
   check('compact 报告真实用量', /800,000/.test(out) ? 1 : 0, 1, out);
-  check('compact 声明压缩已 armed', /Compaction is armed/i.test(out) ? 1 : 0, 1, out);
+  check('compact 声明压缩已预约', /Compaction scheduled/i.test(out) ? 1 : 0, 1, out);
   check('compact 说明在"下一个步骤边界"执行（不再等 idle）', /next step boundary/i.test(out) ? 1 : 0, 1, out);
   check('compact 说明无需结束本轮', /do NOT need to end the turn/i.test(out) ? 1 : 0, 1, out);
   check('compact 明令禁止声称已压缩', /不要\*\*声称自己压缩了|do NOT claim/i.test(out) ? 1 : 0, 1, out);
@@ -381,7 +381,7 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
 
 // ── 5d. ②③ 连用（主路径）：**回合内下一个步骤边界**就压缩，不等 idle ────
 // 这是 2026-09-23 实机事故的回归：上一版只在 idle 执行，而模型调完 context_compact
-// 后继续在同一回合里干活 → 空闲窗口永不出现 → 上膛的压缩从未执行，直到请求被服务端
+// 后继续在同一回合里干活 → 空闲窗口永不出现 → 预约的压缩从未执行，直到请求被服务端
 // 以 CONTEXT_WINDOW_EXCEEDED 拒绝（会话 #4230/#4231）。
 {
   const ctx = makeCtx({ usedTokens: 700_000, contextWindow: 1_000_000 });
@@ -406,16 +406,16 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
   check('5d 压缩只发生一次（已清膛）', ctx.record.compactionCalls, 1, String(ctx.record.compactionCalls));
 }
 
-// ── 5e. 上膛闸门：占用远低于窗口时**只落盘、不压缩**（避免白白压掉历史）──
+// ── 5e. 预约闸门：占用远低于窗口时**只落盘、不压缩**（避免白白压掉历史）──
 {
   const ctx = makeCtx({ usedTokens: 120_000, contextWindow: 1_000_000 });
   apply(ctx, {});
   const out = await ctx.record.tools.get('context_compact').execute({}, { agent: ctx.agent, signal: undefined });
   check('5e 低于窗口 50% 时明确说明不压缩', /below the compaction floor/i.test(out) ? 1 : 0, 1, out);
   await ctx.record.fire('agent/pre-step', { agent: ctx.agent, messages: [], signal: undefined }, { kind: 'enter', messages: [] });
-  check('5e 未上膛时步骤边界不压缩', ctx.record.compactionCalls, 0);
+  check('5e 未预约时步骤边界不压缩', ctx.record.compactionCalls, 0);
   const status = JSON.parse(await ctx.record.tools.get('context_status').execute({}, { agent: ctx.agent, signal: undefined }));
-  check('5e context_status 报 armedCompactions=0', status.armedCompactions, 0);
+  check('5e context_status 报 scheduledCompactions=0', status.scheduledCompactions, 0);
 }
 
 // ── 5f. 执行前复核：期间已被别处压缩过 → 作废，不"刚压完又压一次" ────────
@@ -423,30 +423,30 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
   const ctx = makeCtx({ usedTokens: 700_000, contextWindow: 1_000_000 });
   apply(ctx, {});
   await ctx.record.tools.get('context_compact').execute({}, { agent: ctx.agent, signal: undefined });
-  const armed = JSON.parse(await ctx.record.tools.get('context_status').execute({}, { agent: ctx.agent, signal: undefined }));
-  check('5f 上膛后 armedCompactions=1', armed.armedCompactions, 1);
-  check('5f 记录上膛时的占用量', armed.armedTokens, 700_000);
+  const scheduled = JSON.parse(await ctx.record.tools.get('context_status').execute({}, { agent: ctx.agent, signal: undefined }));
+  check('5f 预约后 scheduledCompactions=1', scheduled.scheduledCompactions, 1);
+  check('5f 记录预约时的占用量', scheduled.scheduledTokens, 700_000);
 
   // 模拟期间发生了一次 DSH 自己的 overflow 兜底压缩：占用从 70 万掉到 6 万
   ctx.record.setUsed(60_000);
   await ctx.record.fire('agent/pre-step', { agent: ctx.agent, messages: [], signal: undefined }, { kind: 'enter', messages: [] });
   check('5f 占用已大幅下降时放弃压缩（不白烧一次摘要）', ctx.record.compactionCalls, 0);
   const after = JSON.parse(await ctx.record.tools.get('context_status').execute({}, { agent: ctx.agent, signal: undefined }));
-  check('5f 作废后已清膛', after.armedCompactions, 0);
+  check('5f 作废后已清膛', after.scheduledCompactions, 0);
 }
 
-// ── 5g. force 开关：显式绕过 50% 地板（实机验证 / 应急）─────────────────
+// ── 5g. force 开关：显式绕过 50% 门槛（实机验证 / 应急）─────────────────
 {
   const ctx = makeCtx({ usedTokens: 120_000, contextWindow: 1_000_000 });
   apply(ctx, {});
   const out = await ctx.record.tools.get('context_compact').execute({ force: true }, { agent: ctx.agent, signal: undefined });
-  check('5g force 时仍上膛', /Compaction is armed/.test(out) ? 1 : 0, 1, out);
-  check('5g force 时如实标注绕过地板', /FORCED/i.test(out) ? 1 : 0, 1, out);
+  check('5g force 时仍预约', /Compaction scheduled/.test(out) ? 1 : 0, 1, out);
+  check('5g force 时如实标注绕过门槛', /FORCED/i.test(out) ? 1 : 0, 1, out);
   await ctx.record.fire('agent/pre-step', { agent: ctx.agent, messages: [], signal: undefined }, { kind: 'enter', messages: [] });
   check('5g force 的重压在步骤边界真的执行', ctx.record.compactionCalls, 1);
 }
 
-// ── 5h. 落盘闸：文件缺失 / 陈旧时**拒绝上膛** ──────────────────────────
+// ── 5h. 落盘闸：文件缺失 / 陈旧时**拒绝预约** ──────────────────────────
 // 为什么这是硬要求：压缩由 pre-step 在"下一个步骤边界"执行，模型**没有**补写的机会。
 // 此刻磁盘上的内容，就是压缩后会被注入到新代提示词里的内容 ——
 // 文件缺失/陈旧就压，等于把最新结论压掉、再注入一份旧总结（用户最怕的"结论丢失"）。
@@ -458,13 +458,13 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
     const ctx = makeCtx({ usedTokens: 800_000, contextWindow: 1_000_000, cwd: emptyDir });
     apply(ctx, {});
     const out = await ctx.record.tools.get('context_compact').execute({}, { agent: ctx.agent, signal: undefined });
-    check('5h 文件缺失时明确拒绝上膛', /NOT armed/i.test(out) && /NOT FOUND/i.test(out) ? 1 : 0, 1, out);
+    check('5h 文件缺失时明确拒绝预约', /NOT scheduled/i.test(out) && /NOT FOUND/i.test(out) ? 1 : 0, 1, out);
     await ctx.record.fire('agent/pre-step', { agent: ctx.agent, messages: [], signal: undefined }, { kind: 'enter', messages: [] });
     check('5h 文件缺失时步骤边界不压缩', ctx.record.compactionCalls, 0);
     const status = JSON.parse(await ctx.record.tools.get('context_status').execute({}, { agent: ctx.agent, signal: undefined }));
     check('5h context_status 如实报 checkpointFresh=false', status.checkpointFresh, false);
 
-    // 低占用（达不到地板）时也必须给出落盘警告，不能让模型以为"工具已收下"
+    // 低占用（达不到门槛）时也必须给出落盘警告，不能让模型以为"工具已收下"
     const lowCtx = makeCtx({ usedTokens: 80_000, contextWindow: 1_000_000, cwd: emptyDir });
     apply(lowCtx, {});
     const lowOut = await lowCtx.record.tools.get('context_compact').execute({}, { agent: lowCtx.agent, signal: undefined });
@@ -478,14 +478,14 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
     const ctx2 = makeCtx({ usedTokens: 800_000, contextWindow: 1_000_000, cwd: staleDir });
     apply(ctx2, {});
     const out2 = await ctx2.record.tools.get('context_compact').execute({}, { agent: ctx2.agent, signal: undefined });
-    check('5h 陈旧文件时明确拒绝上膛', /NOT armed/i.test(out2) && /STALE/i.test(out2) ? 1 : 0, 1, out2);
+    check('5h 陈旧文件时明确拒绝预约', /NOT scheduled/i.test(out2) && /STALE/i.test(out2) ? 1 : 0, 1, out2);
     await ctx2.record.fire('agent/pre-step', { agent: ctx2.agent, messages: [], signal: undefined }, { kind: 'enter', messages: [] });
     check('5h 陈旧文件时步骤边界不压缩', ctx2.record.compactionCalls, 0);
 
-    // (3) 被拒后补写文件 → 立刻可以上膛（自愈路径，不留死循环）
+    // (3) 被拒后补写文件 → 立刻可以预约（自愈路径，不留死循环）
     writeFileSync(staleFile, '# fresh checkpoint\n', 'utf8');
     const out3 = await ctx2.record.tools.get('context_compact').execute({}, { agent: ctx2.agent, signal: undefined });
-    check('5h 补写文件后立刻可以上膛', /Compaction is armed/i.test(out3) ? 1 : 0, 1, out3);
+    check('5h 补写文件后立刻可以预约', /Compaction scheduled/i.test(out3) ? 1 : 0, 1, out3);
   } finally {
     rmSync(emptyDir, { recursive: true, force: true });
     rmSync(staleDir, { recursive: true, force: true });
@@ -499,14 +499,14 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
     const ctx = makeCtx({ usedTokens: 800_000, contextWindow: 1_000_000, cwd: emptyDir });
     apply(ctx, {});
     const out = await ctx.record.tools.get('context_compact').execute({ force: true }, { agent: ctx.agent, signal: undefined });
-    check('5i force 绕过落盘闸仍上膛', /Compaction is armed/i.test(out) ? 1 : 0, 1, out);
+    check('5i force 绕过落盘闸仍预约', /Compaction scheduled/i.test(out) ? 1 : 0, 1, out);
     check('5i force 且无落盘时如实标注绕过', /bypassed/i.test(out) ? 1 : 0, 1, out);
     await ctx.record.fire('agent/pre-step', { agent: ctx.agent, messages: [], signal: undefined }, { kind: 'enter', messages: [] });
     check('5i force 的压缩在步骤边界执行', ctx.record.compactionCalls, 1);
   } finally { rmSync(emptyDir, { recursive: true, force: true }); }
 }
 
-// ── 5j. 用户显式要求 → 跳过**占用**地板，但不跳过落盘闸（D-006）─────────
+// ── 5j. 用户显式要求 → 跳过**占用**门槛，但不跳过落盘闸（D-006）─────────
 // 用户 22:47 的决断：用户自己说"总结一下本轮 / 开始项目"时，要的是"把状态固化下来 +
 // 换一个干净的上下文起点"，**与当前占用多少无关** —— 拿"没到窗口 50%"把人挡回去，
 // 等于把用户的明确指令降级成建议。
@@ -534,23 +534,23 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
   );
 
   try {
-    // (1) 基线：低占用（12%）+ 新鲜检查点，没人要求 → 只落盘、不上膛
+    // (1) 基线：低占用（12%）+ 新鲜检查点，没人要求 → 只落盘、不预约
     const ctx = makeCtx({ usedTokens: 120_000, contextWindow: 1_000_000, cwd: freshDir });
     apply(ctx, {});
     const baseline = await compactTool(ctx).execute({}, { agent: ctx.agent, signal: undefined });
-    check('5j 无用户意图时低占用不上膛（基线）', /below the compaction floor/i.test(baseline) ? 1 : 0, 1, baseline);
+    check('5j 无用户意图时低占用不预约（基线）', /below the compaction floor/i.test(baseline) ? 1 : 0, 1, baseline);
     check('5j 基线不压缩', ctx.record.compactionCalls, 0);
 
-    // (2) 用户说"总结一下本轮" → 同样的低占用，照样上膛
+    // (2) 用户说"总结一下本轮" → 同样的低占用，照样预约
     sendMessage(ctx, '先总结一下本轮，然后把结论落盘');
     const asked = await compactTool(ctx).execute({}, { agent: ctx.agent, signal: undefined });
-    check('5j 用户显式要求后低占用也上膛', /Compaction is armed/i.test(asked) ? 1 : 0, 1, asked);
+    check('5j 用户显式要求后低占用也预约', /Compaction scheduled/i.test(asked) ? 1 : 0, 1, asked);
     check('5j 上线理由如实标注用户意图', /user's explicit request/i.test(asked) ? 1 : 0, 1, asked);
     await step(ctx);
-    check('5j 用户意图的上膛在步骤边界真的执行', ctx.record.compactionCalls, 1);
+    check('5j 用户意图的预约在步骤边界真的执行', ctx.record.compactionCalls, 1);
 
     // (3) 非用户来源（系统注入的各种 src）即便含信号词，也不算"用户要求"
-    //     —— 方向上是故意选保守的一边：漏判退回地板，误判会白压一个还很短的会话。
+    //     —— 方向上是故意选保守的一边：漏判退回门槛，误判会白压一个还很短的会话。
     const injectedCtx = makeCtx({ usedTokens: 120_000, contextWindow: 1_000_000, cwd: freshDir });
     apply(injectedCtx, {});
     for (const kind of ['compact', 'agent-instructions', 'skill-catalog', '@deepseek-ai/dsh-system-prompt']) {
@@ -582,20 +582,20 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
     const offOut = await compactTool(offCtx).execute({}, { agent: offCtx.agent, signal: undefined });
     check('5j 窗口长度 0 表示关闭豁免', /below the compaction floor/i.test(offOut) ? 1 : 0, 1, offOut);
 
-    // (6) **关键安全属性**：用户要求 + 检查点不存在 → 仍然拒绝上膛。
+    // (6) **关键安全属性**：用户要求 + 检查点不存在 → 仍然拒绝预约。
     //     用户要的是"固化状态再压缩"，没有落盘就压，正好压掉他要固化的东西。
     const bareCtx = makeCtx({ usedTokens: 120_000, contextWindow: 1_000_000, cwd: bareDir });
     apply(bareCtx, {});
     sendMessage(bareCtx, '开始项目');
     const bareOut = await compactTool(bareCtx).execute({}, { agent: bareCtx.agent, signal: undefined });
-    check('5j 落盘闸不豁免：用户要求 + 无文件仍拒绝', /NOT armed/i.test(bareOut) && /NOT FOUND/i.test(bareOut) ? 1 : 0, 1, bareOut);
+    check('5j 落盘闸不豁免：用户要求 + 无文件仍拒绝', /NOT scheduled/i.test(bareOut) && /NOT FOUND/i.test(bareOut) ? 1 : 0, 1, bareOut);
     check('5j 拒绝时点明"用户要求过、但没落盘"', /explicitly asked/i.test(bareOut) ? 1 : 0, 1, bareOut);
     await step(bareCtx);
     check('5j 被落盘闸拦下时步骤边界不压缩', bareCtx.record.compactionCalls, 0);
 
     // (7) 工具描述必须把这条规则写给模型看（否则模型会自己去纠结 force）
     const desc = String(compactTool(ctx).description ?? '');
-    check('5j 工具描述说明"用户显式要求可跳过地板"', /user-requested checkpoint skips the usage floor/i.test(desc) ? 1 : 0, 1, desc.slice(0, 200));
+    check('5j 工具描述说明"用户显式要求可跳过门槛"', /user-requested checkpoint skips the usage floor/i.test(desc) ? 1 : 0, 1, desc.slice(0, 200));
 
     // (8) context_status 暴露意图状态：重启后据此确认**新版本真的生效了**
     //     （旧模块没有这两个字段），也用来回答"这次为什么没豁免"。

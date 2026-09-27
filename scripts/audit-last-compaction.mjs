@@ -58,7 +58,7 @@ console.log('\n── 版本特征字符串 ──');
 for (const [label, needle] of [
   ['旧: 压缩失败', '【context-checkpoint】压缩失败'],
   ['旧: Compaction scheduled', 'Compaction scheduled (it runs after this turn ends'],
-  ['新: Compaction is armed', 'Compaction is armed'],
+  ['新: Compaction scheduled', 'Compaction scheduled'],
   ['新: idle boundary', 'next idle boundary'],
   ['越线提醒', '【上下文占用】已过半']
 ]) {
