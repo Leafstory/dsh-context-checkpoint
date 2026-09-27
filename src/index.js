@@ -560,11 +560,11 @@ export function apply(ctx, config = {}) {
   //   · `compactNow()`（L944）走 `agent.runMaintenance()`，**只在真正空闲时可用**，
   //     回合内必抛 `busy / requires an idle agent`。
   //
-  // 第一版实现选了 compactNow + 等 `agent/status → idle`，实机结果：模型调用 context_compact 后
+  // 用 `compactNow()` + 等 `agent/status → idle` 来压缩是走不通的：模型调用 context_compact 后
   // 继续在同一回合里干活 → 空闲窗口永不出现 → 预约的压缩一直没执行，直到请求被服务端
   // 以 CONTEXT_WINDOW_EXCEEDED 拒绝（会话 #4230/#4231 就是这次事故）。
   //
-  // 所以执行点改成 **agent/pre-step（回合内的步骤边界）**，用 'context-overflow' 强制压缩：
+  // 所以执行点放在 **agent/pre-step（回合内的步骤边界）**，用 'context-overflow' 强制压缩：
   //   · 不依赖 800k 阈值（模型配置的 maxTokens 会占掉真实输入上限，阈值可能永远够不到）；
   //   · 不依赖"模型自觉结束本轮"这种碰运气的事 —— 预约后的**下一个步骤**就执行；
   //   · 回合真的已经结束时（模型把 context_compact 当最后一个动作），由 idle 兜底执行并唤醒继续。
