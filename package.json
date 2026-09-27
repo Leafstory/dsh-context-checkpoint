@@ -12,9 +12,10 @@
     "skill",
     "cordis.patch.yml",
     "INSTALL.md",
+    "LICENSE",
     "test-plugin.mjs"
   ],
-  "license": "BSD-3-Clause",
+  "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/build.mjs --check",
