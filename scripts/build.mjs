@@ -26,7 +26,7 @@ const CHECK_ONLY = process.argv.includes('--check');
 /**
  * 去掉注释与字符串字面量，只留可执行代码。
  * 校验必须在**代码**上做：`ctx.tokenMeter` 出现在注释或给模型看的说明文案里是正常的，
- * 直接对整份源码做正则匹配会产生误报（本脚本第一版就误报过）。
+ * 直接对整份源码做正则匹配会产生误报。
  */
 function stripCommentsAndStrings(source) {
   let out = '';
