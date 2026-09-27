@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "@dsh-external/context-checkpoint",
   "version": "0.4.0",
   "description": "DSH 上下文检查点：每步注入真实占用条、模型可显式预约 checkpoint+压缩、压缩后在回合边界执行并自动继续同一任务",
